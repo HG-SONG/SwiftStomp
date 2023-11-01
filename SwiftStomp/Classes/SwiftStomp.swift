@@ -57,6 +57,8 @@ public enum StompCommonHeader : String{
     case heartBeat = "heart-beat"
     case acceptVersion = "accept-version"
     case message = "message"
+    //MARK: 여기
+    case authorization = "authorization"
 }
 
 public enum StompErrorType{
@@ -89,7 +91,7 @@ fileprivate enum StompLogType : String{
 
 // MARK: - SwiftStomp
 public class SwiftStomp{
-    
+    private var loginToken : String? = nil
     fileprivate var host : URL
     fileprivate var connectionHeaders : [String : String]?
     fileprivate var socket : WebSocket!
@@ -142,10 +144,10 @@ public class SwiftStomp{
 
 /// Public Operating functions
 public extension SwiftStomp{
-    func connect(timeout : TimeInterval = 5, acceptVersion : String = "1.1,1.2", autoReconnect : Bool = false){
+    func connect(timeout : TimeInterval = 5, acceptVersion : String = "1.1,1.2", autoReconnect : Bool = false, loginToken: String){
         
         self.autoReconnect = autoReconnect
-
+        
         //** If socket is connected now, just needs to connect to the Stomp
         if self.status == .socketConnected{
             self.stompConnect()
@@ -153,6 +155,9 @@ public extension SwiftStomp{
         }
         
         var urlRequest = URLRequest(url: self.host)
+        
+        // MARK: loginToken 최초 세팅
+        self.loginToken = loginToken
         
         //** Accept Version
         self.acceptVersion = acceptVersion
@@ -235,7 +240,7 @@ public extension SwiftStomp{
     func ack(messageId : String, transaction : String? = nil){
         let headerBuilder = StompHeaderBuilder
             .add(key: .id, value: messageId)
-
+        
         if let transaction = transaction{
             _ = headerBuilder.add(key: .transaction, value: transaction)
         }
@@ -248,7 +253,7 @@ public extension SwiftStomp{
     func nack(messageId : String, transaction : String? = nil){
         let headerBuilder = StompHeaderBuilder
             .add(key: .id, value: messageId)
-
+        
         if let transaction = transaction{
             _ = headerBuilder.add(key: .transaction, value: transaction)
         }
@@ -330,14 +335,14 @@ fileprivate extension SwiftStomp{
         if !self.enableLogging { return }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-
+        
         print("\(formatter.string(from: Date())) SwiftStomp [\(type.rawValue)]:\t \(message)")
     }
     
     func prepareHeadersForSend(to : String, receiptId : String? = nil, headers : [String : String]? = nil) -> [String : String]{
         
         let headerBuilder = StompHeaderBuilder
-        .add(key: .destination, value: to)
+            .add(key: .destination, value: to)
         
         if let receiptId = receiptId{
             _ = headerBuilder.add(key: .receipt, value: receiptId)
@@ -359,9 +364,9 @@ fileprivate extension SwiftStomp{
         if let scheduler = self.reconnectScheduler, scheduler.isValid{
             scheduler.invalidate()
         }
-
+        
         try? self.reachability.startNotifier()
-
+        
         self.reconnectScheduler = Timer.scheduledTimer(withTimeInterval: 3, repeats: true, block: { [weak self] (timer) in
             guard let self = self else {
                 return
@@ -370,8 +375,13 @@ fileprivate extension SwiftStomp{
                 self.stompLog(type: .info, message: "Network is not reachable. Ignore connecting!")
                 return
             }
-
-            self.connect(autoReconnect: self.autoReconnect)
+            //MARK: 수정
+            guard let loginToken = self.loginToken else {
+                print("로그인 토큰 없음 ( scheduleConnector )")
+                return
+            }
+            
+            self.connect(autoReconnect: self.autoReconnect, loginToken: loginToken )
         })
     }
     
@@ -379,7 +389,7 @@ fileprivate extension SwiftStomp{
         if let connector = self.reconnectScheduler, connector.isValid{
             connector.invalidate()
         }
-
+        
         self.reachability.stopNotifier()
     }
     
@@ -394,6 +404,13 @@ fileprivate extension SwiftStomp{
             .add(key: .acceptVersion, value: self.acceptVersion)
             .get
         
+        //MARK: 여기서 로그인토큰 set해주자
+        guard let loginToken = self.loginToken else {
+            print("ws header : loginToken not exist")
+            return
+        }
+        headers[StompCommonHeader.authorization.rawValue] = loginToken
+        
         //** Append connection headers
         if let connectionHeaders = self.connectionHeaders{
             for (hKey, hVal) in connectionHeaders{
@@ -401,7 +418,7 @@ fileprivate extension SwiftStomp{
             }
         }
         
-            
+        
         
         self.sendFrame(frame: StompFrame(name: .connect, headers: headers))
     }
@@ -417,7 +434,7 @@ fileprivate extension SwiftStomp{
     
     func processReceivedSocketText(text : String){
         var frame : StompFrame<StompResponseFrame>
-
+        
         //** Deserialize frame
         do{
             frame = try StompFrame(withSerializedString: text)
@@ -427,7 +444,7 @@ fileprivate extension SwiftStomp{
         }
         
         //** Dispatch STOMP frame
-
+        
         switch frame.name {
         case .message:
             stompLog(type: .info, message: "Stomp: Message received: \(String(describing: frame.body))")
@@ -454,7 +471,7 @@ fileprivate extension SwiftStomp{
                 self.delegate?.onDisconnect(swiftStomp: self, disconnectType: .fromStomp)
                 self.socket.disconnect()
             }
-
+            
         case .error:
             self.status = .socketConnected
             
@@ -493,7 +510,7 @@ fileprivate extension SwiftStomp{
         default:
             break
         }
-            
+        
         let rawFrameToSend = frame.serialize()
         
         stompLog(type: .info, message: "Stomp: Sending...\n\(rawFrameToSend)\n")
@@ -523,7 +540,8 @@ fileprivate extension SwiftStomp{
 
 /// Web socket delegate
 extension SwiftStomp : WebSocketDelegate{
-    public func didReceive(event: WebSocketEvent, client: WebSocketClient) {
+    
+    public func didReceive(event: WebSocketEvent, client: WebSocket) {
         switch event {
         case .connected(let headers):
             self.status = .socketConnected
@@ -564,17 +582,21 @@ extension SwiftStomp : WebSocketDelegate{
             stompLog(type: .info, message: "Socket: Reconnect suggested: \(suggested)")
             
             self.delegate?.onSocketEvent(eventName: "reconnectSuggested", description: "Socket Reconnect suggested")
-
+            
             if suggested{
-                self.connect()
+                guard let loginToken = self.loginToken else {
+                    print("로그인 토큰 없음 ( DidReceive )")
+                    return
+                }
+                self.connect(loginToken:loginToken)
             }
         case .cancelled:
             self.status = .socketDisconnected
-
+            
             stompLog(type: .info, message: "Socket: Cancelled")
             
             self.delegate?.onSocketEvent(eventName: "cancelled", description: "Socket cancelled")
-
+            
             if self.autoReconnect{
                 self.scheduleConnector()
             }
@@ -587,10 +609,6 @@ extension SwiftStomp : WebSocketDelegate{
             if self.autoReconnect{
                 self.scheduleConnector()
             }
-        case .peerClosed:
-            stompLog(type: .info, message: "Socket: Peer closed")
-        @unknown default:
-            stompLog(type: .info, message: "Socket: Unexpected event kind: \(String(describing: event))")
         }
     }
     
@@ -764,4 +782,3 @@ public class InvalidStompCommandError : Error{
         return "Invalid STOMP command"
     }
 }
-
