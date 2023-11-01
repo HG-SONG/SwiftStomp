@@ -141,7 +141,7 @@ Ahmad Daneshvar, romixery@gmail.com
 
 SwiftStomp is available under the MIT license. See the LICENSE file for more info.
 
-
+## --------
 ++ 
 This forked repository has some customized parts for learning purposes. I'll delete it if it's a problem.
 
