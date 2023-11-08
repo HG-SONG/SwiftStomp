@@ -58,7 +58,7 @@ public enum StompCommonHeader : String{
     case acceptVersion = "accept-version"
     case message = "message"
     //MARK: 여기
-    case authorization = "authorization"
+    case authorization = "Authorization"
 }
 
 public enum StompErrorType{
@@ -782,3 +782,4 @@ public class InvalidStompCommandError : Error{
         return "Invalid STOMP command"
     }
 }
+
